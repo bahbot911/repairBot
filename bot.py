@@ -4,7 +4,6 @@ import sqlite3
 import logging
 import threading
 from flask import Flask
-import os
 from datetime import datetime, timedelta
 
 from telegram import Update
@@ -126,8 +125,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Пришли голосовое или текст в формате:\n"
         "Машина 5, замена масла, 2500, слесарь Петров\n"
         "Команды:\n"
-        "/history - последние записи (все)\n"
-        "/history 5 - по машине №5\n""/report - отчёт за сегодня\n"
+        "/history - последние записи (все)\n""/history 5 - по машине №5\n"
+        "/report - отчёт за сегодня\n"
         "/report 5 - за сегодня по машине 5\n"
         "/report 7 - за 7 дней по всем\n"
         "/report 5 7 - за 7 дней по машине 5"
@@ -228,13 +227,29 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = msg[:4000] + "\n... (обрезано)"
 
     await update.message.reply_text(msg)
+
+# ---------- Заглушка для Render (чтобы видел порт) ----------
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Бот работает 24/7!"
+
+def run_web_server():
+    port = int(os.environ.get('PORT', 10000))
+    web_app.run(host='0.0.0.0', port=port)
+
+# ---------- Запуск бота ----------
 def main():
     init_db()
     app = Application.builder().token(TOKEN).build()
 
-    # Удаляем старый webhook синхронно (чтобы убрать ошибку Conflict)
-    import asyncio
-    asyncio.run(app.bot.delete_webhook())
+    # Синхронно удаляем старый вебхук (чтобы не было Conflict)
+    import requests
+    try:
+        requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
+    except:
+        pass
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("history", history))
@@ -242,12 +257,11 @@ def main():
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Запускаем через Webhook. Telegram сам будет стучаться к боту, а Render увидит порт!
-    port = int(os.environ.get('PORT', 10000))
-    app.run_webhook(listen='0.0.0.0',
-                    port=port,
-                    url_path=TOKEN,
-                    webhook_url=f'https://repairBot.onrender.com/{TOKEN}')
+    # Запускаем веб-сервер в фоновом потоке (чтобы Render не убивал процесс)
+    threading.Thread(target=run_web_server, daemon=True).start()
+
+    # Запускаем бота в режиме polling (стабильно и без циклов)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
