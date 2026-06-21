@@ -2,6 +2,9 @@ import os
 import re
 import sqlite3
 import logging
+import threading
+from flask import Flask
+import os
 from datetime import datetime, timedelta
 
 from telegram import Update
@@ -236,9 +239,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.run_polling()
 
-import threading
-from flask import Flask
-import os
+
 
 # Создаем простой веб-сервер-заглушку
 web_app = Flask(__name__)
