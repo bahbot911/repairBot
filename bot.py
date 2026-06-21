@@ -262,10 +262,20 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.run_polling()
 
+if __name__ == "__main__":
+    main()
+def main():
+    init_db()
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("history", history))
+    app.add_handler(CommandHandler("report", report))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.run_polling()
+
 if name == "__main__":
-    # Запускаем веб-сервер в фоне (чтобы Render не ругался)
+    # Запускаем веб-сервер в фоне (чтобы Render не ругался на порты)
     threading.Thread(target=run_web_server, daemon=True).start()
     # Запускаем самого бота
-    main()
-if __name__ == "__main__":
     main()
