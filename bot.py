@@ -228,12 +228,13 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = msg[:4000] + "\n... (обрезано)"
 
     await update.message.reply_text(msg)
-async def main():
+def main():
     init_db()
     app = Application.builder().token(TOKEN).build()
 
-    # Удаляем старый webhook (это на 100% устранит ошибку Conflict)
-    await app.bot.delete_webhook()
+    # Удаляем старый webhook синхронно (чтобы убрать ошибку Conflict)
+    import asyncio
+    asyncio.run(app.bot.delete_webhook())
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("history", history))
@@ -249,5 +250,4 @@ async def main():
                     webhook_url=f'https://repairBot.onrender.com/{TOKEN}')
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
