@@ -2,6 +2,7 @@ services:
   - type: web
     name: telegram-repair-bot
     runtime: python
+    pythonVersion 3.11
     buildCommand: |
       apt-get update
       apt-get install -y ffmpeg
