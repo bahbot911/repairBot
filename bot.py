@@ -248,6 +248,6 @@ async def main():
                     url_path=TOKEN,
                     webhook_url=f'https://repairBot.onrender.com/{TOKEN}')
 
-if name == "__main__":
+if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
