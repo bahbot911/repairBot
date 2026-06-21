@@ -124,8 +124,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Машина 5, замена масла, 2500, слесарь Петров\n"
         "Команды:\n"
         "/history - последние записи (все)\n"
-        "/history 5 - по машине №5\n"
-"/report - отчёт за сегодня\n"
+        "/history 5 - по машине №5\n""/report - отчёт за сегодня\n"
         "/report 5 - за сегодня по машине 5\n"
         "/report 7 - за 7 дней по всем\n"
         "/report 5 7 - за 7 дней по машине 5"
@@ -237,5 +236,5 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.run_polling()
 
-if name == "__main__":
+if __name__ == "__main__":
     main()
