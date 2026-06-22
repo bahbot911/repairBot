@@ -1,267 +1,306 @@
 import os
-import re
-import sqlite3
 import logging
-import threading
-from flask import Flask
-from datetime import datetime, timedelta
+from datetime import datetime
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import db
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
-import speech_recognition as sr
-from pydub import AudioSegment
-
-# ---------- Настройки ----------
-# ВСТАВЬТЕ СЮДА ВАШ НОВЫЙ ТОКЕН ОТ @BotFather
-TOKEN = "8818860457:AAF2bEUKZZ_DlOlWIO7byjpYNblTOpeo3j0"
-DB_NAME = "repairs.db"
-
+# Настройка логов
 logging.basicConfig(level=logging.INFO)
 
-# ---------- База данных ----------
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS repairs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    car_number TEXT,
-                    what_done TEXT,
-                    who_did TEXT,
-                    cost REAL DEFAULT 0,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                 )''')
-    conn.commit()
-    conn.close()
+# Инициализация бота
+API_TOKEN = os.getenv('BOT_TOKEN')
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot)
+dp.middleware.setup(LoggingMiddleware())
 
-def save_repair(car_number, what_done, who_did, cost):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("INSERT INTO repairs (car_number, what_done, who_did, cost) VALUES (?, ?, ?, ?)",
-              (car_number, what_done, who_did, cost))
-    conn.commit()
-    conn.close()
+# ============= КЛАВИАТУРЫ =============
 
-def get_repairs(car_number=None, days=None):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    query = "SELECT * FROM repairs WHERE timestamp >= ?"
-    params = []
-    if days is not None:
-        since = datetime.now() - timedelta(days=days)
-    else:
-        since = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    params.append(since.isoformat())
+def get_main_keyboard():
+    """Главная клавиатура"""
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    buttons = [
+        types.KeyboardButton('➕ Новый ремонт'),
+        types.KeyboardButton('📋 Активные ремонты'),
+        types.KeyboardButton('✅ Завершённые'),
+        types.KeyboardButton('📊 Статистика'),
+        types.KeyboardButton('🔍 Поиск по номеру')
+    ]
+    keyboard.add(*buttons)
+    return keyboard
 
-    if car_number:
-        query += " AND car_number = ?"
-        params.append(car_number)
+# ============= ОБРАБОТЧИКИ КОМАНД =============
 
-    query += " ORDER BY timestamp DESC"
-    c.execute(query, params)
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-# ---------- Распознавание голоса ----------
-def voice_to_text(voice_file_path):
-    audio = AudioSegment.from_ogg(voice_file_path)
-    wav_path = voice_file_path.replace(".ogg", ".wav")
-    audio.export(wav_path, format="wav")
-
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_path) as source:
-        audio_data = recognizer.record(source)
-    try:
-        text = recognizer.recognize_google(audio_data, language="ru-RU")
-    except sr.UnknownValueError:
-        text = ""
-    except sr.RequestError:
-        text = ""
-
-    os.remove(voice_file_path)
-    os.remove(wav_path)
-    return text
-
-# ---------- Парсинг текста ----------
-def parse_repair_text(text):
-    text = text.lower().strip()
-    # Извлекаем номер машины
-    car_match = re.search(r'(?:машин[аы]?\s*)?(\d+)', text)
-    car_number = car_match.group(1) if car_match else "неизвестно"
-
-    # Удаляем номер машины из текста для дальнейшего поиска
-    rest = text
-    if car_match:
-        rest = rest.replace(car_match.group(0), "")
-
-    # Ищем исполнителя
-    who_match = re.search(r'(?:слесарь|мастер|делал\s*)?\s*([а-яё]+(?:[-\s][а-яё]+)?)', rest)
-    who_did = who_match.group(1).strip() if who_match else "неизвестно"
-
-    # Удаляем исполнителя из остатка
-    if who_match:
-        rest = rest.replace(who_match.group(1), "")
-
-    # Ищем сумму (число, возможно с десятичной частью)
-    cost_match = re.search(r'(\d+[.,]?\d*)', rest)
-    cost = float(cost_match.group(1).replace(',', '.')) if cost_match else 0.0
-
-    # Удаляем сумму из остатка
-    if cost_match:
-        rest = rest.replace(cost_match.group(0), "")
-
-    # Очищаем описание от лишних знаков
-    what_done = re.sub(r'[,.;:!?]+', ' ', rest).strip()
-    if not what_done:
-        what_done = "не указано"
-
-    return car_number, what_done, who_did, cost
-
-# ---------- Обработчики команд ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Привет! Бот для учёта ремонта машин.\n"
-        "Пришли голосовое или текст в формате:\n"
-        "Машина 5, замена масла, 2500, слесарь Петров\n"
-        "Команды:\n"
-        "/history - последние записи (все)\n""/history 5 - по машине №5\n"
-        "/report - отчёт за сегодня\n"
-        "/report 5 - за сегодня по машине 5\n"
-        "/report 7 - за 7 дней по всем\n"
-        "/report 5 7 - за 7 дней по машине 5"
-    )
-
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    voice = update.message.voice
-    if not voice:
-        return
-    file = await context.bot.get_file(voice.file_id)
-    ogg_path = f"voice_{voice.file_unique_id}.ogg"
-    await file.download_to_drive(ogg_path)
-
-    await update.message.reply_text("🔄 Распознаю голос...")
-    text = voice_to_text(ogg_path)
-    if not text:
-        await update.message.reply_text("❌ Не распознано. Попробуйте чётче.")
-        return
-
-    car_number, what_done, who_did, cost = parse_repair_text(text)
-    save_repair(car_number, what_done, who_did, cost)
-
-    reply = (f"✅ Записано!\n"
-             f"Машина: {car_number}\n"
-             f"Работа: {what_done}\n"
-             f"Сумма: {cost} руб.\n"
-             f"Кто: {who_did}\n"
-             f"Распознанный текст: {text}")
-    await update.message.reply_text(reply)
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text.startswith('/'):
-        return
-    car_number, what_done, who_did, cost = parse_repair_text(text)
-    save_repair(car_number, what_done, who_did, cost)
-    await update.message.reply_text(
-        f"✅ Записано из текста:\n"
-        f"Машина {car_number}\n"
-        f"Работа: {what_done}\n"
-        f"Сумма: {cost} руб.\n"
-        f"Кто: {who_did}"
-    )
-
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    car_filter = args[0] if args else None
-    rows = get_repairs(car_number=car_filter, days=30)
-    if not rows:
-        await update.message.reply_text("Записей нет.")
-        return
-    msg = "📋 Последние записи (за 30 дней):\n"
-    total = 0
-    for row in rows[:10]:
-        msg += f"#{row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} руб. | {row[5][:16]}\n"
-        total += row[4]
-    msg += f"\nОбщая сумма по показанным: {total} руб."
-    await update.message.reply_text(msg)
-
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    car_filter = None
-    days = None
-
-    if len(args) == 0:
-        days = 0
-    elif len(args) == 1:
-        if args[0].isdigit():
-            days = int(args[0])
+@dp.message_handler(commands=['start', 'help'])
+async def cmd_start(message: types.Message):
+    """Обработка команды /start"""
+    user_id = message.from_user.id
+    username = message.from_user.username
+    
+    # Проверка в белом списке
+    if not db.is_user_whitelisted(user_id):
+        # Для первого запуска — добавим первого пользователя автоматически
+        # В реальном проекте убираем эту автоматическую добавку
+        if db.add_to_whitelist(user_id, username):
+            await message.answer(
+                "👋 Привет! Я бот для учёта ремонтов автомобилей.\n\n"
+                "Доступные команды:\n"
+                "➕ Новый ремонт - добавить новый ремонт\n"
+                "📋 Активные ремонты - посмотреть текущие ремонты\n"
+                "✅ Завершённые - завершённые ремонты\n"
+                "📊 Статистика - статистика по ремонтам\n"
+                "🔍 Поиск по номеру - найти все ремонты по госномеру",
+                reply_markup=get_main_keyboard()
+            )
         else:
-            car_filter = args[0]
-            days = 0
-    elif len(args) >= 2:
-        car_filter = args[0]
-        days = int(args[1])
-
-    rows = get_repairs(car_number=car_filter, days=days)
-    if not rows:
-        await update.message.reply_text("Записей за выбранный период нет.")
+            await message.answer("❌ Ошибка добавления в белый список. Обратитесь к администратору.")
         return
+    
+    await message.answer(
+        "👋 Привет! Я бот для учёта ремонтов автомобилей.\n\n"
+        "Доступные команды:\n"
+        "➕ Новый ремонт - добавить новый ремонт\n"
+        "📋 Активные ремонты - посмотреть текущие ремонты\n"
+        "✅ Завершённые - завершённые ремонты\n"
+        "📊 Статистика - статистика по ремонтам\n"
+        "🔍 Поиск по номеру - найти все ремонты по госномеру",
+        reply_markup=get_main_keyboard()
+    )
 
-    msg = f"📊 Отчёт{' по машине ' + car_filter if car_filter else ''} за "
-    if days == 0:
-        msg += "сегодня"
-    elif days == 1:
-        msg += "последний день"
-    else:
-        msg += f"последние {days} дней"
-    msg += ":\n\n"
+@dp.message_handler(lambda message: message.text == '➕ Новый ремонт')
+async def add_repair_start(message: types.Message):
+    """Начало добавления нового ремонта"""
+    await message.answer(
+        "📝 Введите данные ремонта в формате:\n\n"
+        "Номер машины\n"
+        "Модель (опционально)\n"
+        "Описание работ\n"
+        "Мастер (опционально)\n\n"
+        "Пример:\n"
+        "А123ВВ77\n"
+        "Toyota Camry\n"
+        "Замена масла и фильтров\n"
+        "Иван Петров"
+    )
+    # Устанавливаем состояние
+    dp['state'] = {'action': 'add_repair', 'user_id': message.from_user.id}
 
-    total = 0
-    for row in rows:
-        msg += f"{row[5][:16]} | Маш.{row[1]} | {row[2]} | {row[3]} | {row[4]} руб.\n"
-        total += row[4]
-    msg += f"\n💰 Итого: {total} руб."
-
-    if len(msg) > 4096:
-        msg = msg[:4000] + "\n... (обрезано)"
-
-    await update.message.reply_text(msg)
-
-# ---------- Заглушка для Render (чтобы видел порт) ----------
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def home():
-    return "Бот работает 24/7!"
-
-def run_web_server():
-    port = int(os.environ.get('PORT', 10000))
-    web_app.run(host='0.0.0.0', port=port)
-
-# ---------- Запуск бота ----------
-def main():
-    init_db()
-    app = Application.builder().token(TOKEN).build()
-
-    # Синхронно удаляем старый вебхук (чтобы не было Conflict)
-    import requests
+@dp.message_handler(lambda message: dp.get('state', {}).get('action') == 'add_repair')
+async def add_repair_process(message: types.Message):
+    """Обработка ввода данных нового ремонта"""
+    lines = message.text.strip().split('\n')
+    
+    if len(lines) < 2:
+        await message.answer("❌ Пожалуйста, введите как минимум номер и описание.")
+        return
+    
+    car_number = lines[0].strip()
+    car_model = lines[1].strip() if len(lines) > 1 else None
+    description = lines[2].strip() if len(lines) > 2 else "Нет описания"
+    master = lines[3].strip() if len(lines) > 3 else None
+    
     try:
-        requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
-    except:
-        pass
+        repair_id = db.add_repair(car_number, description, car_model, master, message.from_user.id)
+        
+        await message.answer(
+            f"✅ Ремонт добавлен!\n\n"
+            f"🆔 ID: {repair_id}\n"
+            f"🚗 Номер: {car_number}\n"
+            f"📝 Описание: {description}\n"
+            f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
+            f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+            reply_markup=get_main_keyboard()
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении ремонта: {str(e)}")
+    
+    dp['state'] = {}
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("history", history))
-    app.add_handler(CommandHandler("report", report))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+@dp.message_handler(lambda message: message.text == '📋 Активные ремонты')
+async def show_active_repairs(message: types.Message):
+    """Показать активные ремонты"""
+    repairs = db.get_all_repairs(status='в работе', limit=20)
+    
+    if not repairs:
+        await message.answer("🔆 Активных ремонтов нет.", reply_markup=get_main_keyboard())
+        return
+    
+    text = "📋 *Активные ремонты:*\n\n"
+    for r in repairs:
+        text += (
+            f"🆔 #{r['id']}\n"
+            f"🚗 {r['car_number']} {r['car_model'] or ''}\n"
+            f"📝 {r['description'][:40]}{'...' if len(r['description']) > 40 else ''}\n"
+            f"👨‍🔧 {r['master'] or 'Не указан'}\n"
+            f"📅 {r['created_at'].strftime('%d.%m.%Y %H:%M')}\n"
+            f"---\n"
+        )
+    
+    # Добавляем кнопки для завершения
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    for r in repairs[:5]:  # максимум 5 кнопок
+        keyboard.add(InlineKeyboardButton(
+            f"✅ Завершить #{r['id']}", 
+            callback_data=f"complete_{r['id']}"
+        ))
+    
+    await message.answer(text, reply_markup=keyboard, parse_mode='Markdown')
 
-    # Запускаем веб-сервер в фоновом потоке (чтобы Render не убивал процесс)
-    threading.Thread(target=run_web_server, daemon=True).start()
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('complete_'))
+async def process_complete_callback(callback_query: types.CallbackQuery):
+    """Обработка завершения ремонта по кнопке"""
+    await bot.answer_callback_query(callback_query.id)
+    
+    repair_id = int(callback_query.data.split('_')[1])
+    repair = db.get_repair(repair_id)
+    
+    if not repair:
+        await bot.send_message(callback_query.from_user.id, "❌ Ремонт не найден")
+        return
+    
+    # Запрашиваем стоимость
+    msg = await bot.send_message(
+        callback_query.from_user.id,
+        f"💰 Введите стоимость ремонта #{repair_id}:\n"
+        f"(например: 5000 или 5000.50)\n\n"
+        f"🚗 {repair['car_number']}\n"
+        f"📝 {repair['description']}"
+    )
+    
+    # Сохраняем состояние
+    dp['state'] = {
+        'action': 'complete_repair',
+        'repair_id': repair_id,
+        'user_id': callback_query.from_user.id
+    }
 
-    # Запускаем бота в режиме polling (стабильно и без циклов)
-    app.run_polling()
+@dp.message_handler(lambda message: dp.get('state', {}).get('action') == 'complete_repair')
+async def complete_repair_process(message: types.Message):
+    """Обработка ввода стоимости и завершение ремонта"""
+    try:
+        cost = float(message.text.replace(',', '.'))
+        repair_id = dp['state']['repair_id']
+        
+        if db.update_repair_status(repair_id, 'завершён', cost):
+            await message.answer(
+                f"✅ Ремонт #{repair_id} завершён!\n"
+                f"💰 Стоимость: {cost:.2f} руб.",
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            await message.answer("❌ Ошибка при завершении ремонта")
+    except ValueError:
+        await message.answer("❌ Введите корректную стоимость (число)")
+        return
+    
+    dp['state'] = {}
 
-if __name__ == "__main__":
-    main()
+@dp.message_handler(lambda message: message.text == '✅ Завершённые')
+async def show_completed_repairs(message: types.Message):
+    """Показать завершённые ремонты"""
+    repairs = db.get_all_repairs(status='завершён', limit=20)
+    
+    if not repairs:
+        await message.answer("🔆 Завершённых ремонтов нет.", reply_markup=get_main_keyboard())
+        return
+    
+    text = "✅ *Завершённые ремонты:*\n\n"
+    for r in repairs:
+        text += (
+            f"🆔 #{r['id']}\n"
+            f"🚗 {r['car_number']} {r['car_model'] or ''}\n"
+            f"📝 {r['description'][:40]}{'...' if len(r['description']) > 40 else ''}\n"
+            f"💰 {r['cost']:.2f} руб.\n"
+            f"📅 {r['completed_at'].strftime('%d.%m.%Y') if r['completed_at'] else 'Дата неизвестна'}\n"
+            f"---\n"
+        )
+    
+    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+
+@dp.message_handler(lambda message: message.text == '📊 Статистика')
+async def show_stats(message: types.Message):
+    """Показать статистику"""
+    today_stats = db.get_today_stats()
+    weekly_stats = db.get_weekly_stats()
+    
+    text = (
+        f"📊 *Статистика ремонтов*\n\n"
+        f"*Сегодня:*\n"
+        f"📌 Всего: {today_stats['total']}\n"
+        f"✅ Завершено: {today_stats['completed']}\n"
+        f"💰 Сумма: {today_stats['total_cost']:.2f} руб.\n\n"
+        f"*За неделю:*\n"
+    )
+    
+    if weekly_stats:
+        for day in weekly_stats[:7]:
+            text += (
+                f"📅 {day['date'].strftime('%d.%m')}: "
+                f"{day['total']} рем., "
+                f"{day['completed']} заверш., "
+                f"{day['total_cost']:.2f} руб.\n"
+            )
+    else:
+        text += "Нет данных за неделю"
+    
+    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+
+@dp.message_handler(lambda message: message.text == '🔍 Поиск по номеру')
+async def search_by_car(message: types.Message):
+    """Поиск по номеру машины"""
+    await message.answer(
+        "🔍 Введите номер машины для поиска:\n"
+        "(например: А123ВВ77)"
+    )
+    dp['state'] = {'action': 'search_car', 'user_id': message.from_user.id}
+
+@dp.message_handler(lambda message: dp.get('state', {}).get('action') == 'search_car')
+async def search_car_process(message: types.Message):
+    """Обработка поиска по номеру"""
+    car_number = message.text.strip().upper()
+    repairs = db.get_repairs_by_car(car_number)
+    
+    if not repairs:
+        await message.answer(
+            f"🚫 Ремонтов для машины {car_number} не найдено.",
+            reply_markup=get_main_keyboard()
+        )
+        dp['state'] = {}
+        return
+    
+    text = f"🔍 *Найдено ремонтов для {car_number}:*\n\n"
+    for r in repairs[:10]:
+        status_emoji = "✅" if r['status'] == 'завершён' else "🔄"
+        text += (
+            f"{status_emoji} #{r['id']} | {r['status']}\n"
+            f"📝 {r['description'][:50]}{'...' if len(r['description']) > 50 else ''}\n"
+            f"{f'💰 {r['cost']:.2f} руб.' if r['cost'] else ''}\n"
+            f"---\n"
+        )
+    
+    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+    dp['state'] = {}
+
+@dp.message_handler()
+async def handle_unknown(message: types.Message):
+    """Обработка неизвестных сообщений"""
+    await message.answer(
+        "🤔 Неизвестная команда. Используйте клавиатуру или /help",
+        reply_markup=get_main_keyboard()
+    )
+
+# ============= ЗАПУСК =============
+
+if __name__ == '__main__':
+    # Проверяем подключение к БД
+    if not db.test_connection():
+        print("❌ Не удалось подключиться к PostgreSQL. Завершение...")
+        exit(1)
+    
+    # Инициализируем БД
+    db.init_db()
+    
+    # Запускаем бота
+    print("🤖 Бот запущен!")
+    executor.start_polling(dp, skip_updates=True)
