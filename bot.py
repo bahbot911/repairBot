@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from datetime import datetime
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
@@ -295,6 +296,14 @@ async def handle_unknown(message: types.Message):
 
 # ============= ЗАПУСК =============
 
+
+async def on_startup(dp):
+    """Действия при запуске бота"""
+    # Сбросить webhook, если он был установлен
+    await bot.delete_webhook()
+    print("✅ Webhook удалён")
+    print("🤖 Бот запущен!")
+
 if __name__ == '__main__':
     # Проверяем подключение к БД
     if not db.test_connection():
@@ -304,6 +313,9 @@ if __name__ == '__main__':
     # Инициализируем БД
     db.init_db()
     
+    # Небольшая задержка перед запуском (чтобы старый экземпляр отключился)
+    print("⏳ Подготовка к запуску...")
+    time.sleep(2)
+    
     # Запускаем бота
-    print("🤖 Бот запущен!")
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
