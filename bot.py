@@ -211,7 +211,7 @@ async def show_completed_repairs(message: types.Message):
             f"🆔 #{r['id']}\n"
             f"🚗 {r['car_number']} {r['car_model'] or ''}\n"
             f"📝 {r['description'][:40]}{'...' if len(r['description']) > 40 else ''}\n"
-            f"💰 {r['cost']:.2f} руб.\n"
+            f"💰 {r['cost']:.2f} руб.\n"  # <-- ИСПРАВЛЕНО: двойные кавычки
             f"📅 {r['completed_at'].strftime('%d.%m.%Y') if r['completed_at'] else 'Дата неизвестна'}\n"
             f"---\n"
         )
@@ -275,7 +275,7 @@ async def search_car_process(message: types.Message):
         text += (
             f"{status_emoji} #{r['id']} | {r['status']}\n"
             f"📝 {r['description'][:50]}{'...' if len(r['description']) > 50 else ''}\n"
-            f"{f'💰 {r['cost']:.2f} руб.' if r['cost'] else ''}\n"
+            f"{f'💰 {r["cost"]:.2f} руб.' if r['cost'] else ''}\n"  # <-- ИСПРАВЛЕНО: двойные кавычки
             f"---\n"
         )
     
