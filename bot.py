@@ -272,10 +272,13 @@ async def search_car_process(message: types.Message):
     text = f"🔍 *Найдено ремонтов для {car_number}:*\n\n"
     for r in repairs[:10]:
         status_emoji = "✅" if r['status'] == 'завершён' else "🔄"
+             # Формируем строку со стоимостью отдельно
+        cost_str = f"💰 {r['cost']:.2f} руб." if r['cost'] else ""
+        
         text += (
             f"{status_emoji} #{r['id']} | {r['status']}\n"
             f"📝 {r['description'][:50]}{'...' if len(r['description']) > 50 else ''}\n"
-            f"{f'💰 {r["cost"]:.2f} руб.' if r['cost'] else ''}\n"  # <-- ИСПРАВЛЕНО: двойные кавычки
+            f"{cost_str}\n"  # <-- ТЕПЕРЬ ПРОСТО ПОДСТАВЛЯЕМ ГОТОВУЮ СТРОКУ
             f"---\n"
         )
     
