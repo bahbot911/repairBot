@@ -742,24 +742,7 @@ async def handle_unknown(message: types.Message):
 # ============= ЗАПУСК =============
 
 async def on_startup(dp):
-    """Действия при запуске бота"""
-    try:
-        await bot.delete_webhook()
-        print("✅ Webhook удалён")
-        
-        # Устанавливаем команды бота
-        await bot.set_my_commands([
-            BotCommand("start", "Начать работу"),
-            BotCommand("help", "Помощь"),
-            BotCommand("cancel", "Отменить действие")
-        ])
-        print("✅ Команды установлены")
-        
-        print("🤖 Бот запущен и готов к работе!")
-    except Exception as e:
-        print(f"⚠️ Ошибка при старте: {e}")
-
-if __name__ == '__main__':
+   if __name__ == '__main__':
     try:
         print("🚀 Запуск repairBot...")
         print(f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -788,4 +771,22 @@ if __name__ == '__main__':
         # Инициализируем БД
         print("⏳ Инициализация БД...")
         db.init_db()
-        print("✅" Б
+        print("✅ БД инициализирована")
+        
+        # Ждем, пока старый экземпляр завершится
+        print("⏳ Ожидание завершения старых процессов...")
+        time.sleep(3)
+        
+        # Запускаем бота
+        print("🚀 Запуск polling...")
+        executor.start_polling(
+            dp, 
+            skip_updates=True,
+            on_startup=on_startup,
+            allowed_updates=['message', 'callback_query']
+        )
+        
+    except Exception as e:
+        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        traceback.print_exc()
+        exit(1)
