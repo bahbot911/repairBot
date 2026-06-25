@@ -322,3 +322,27 @@ def test_connection():
     except Exception as e:
         print(f"❌ Ошибка подключения к PostgreSQL: {e}")
         return False
+# Добавить в db.py
+
+def update_repair_field(repair_id: int, field: str, value):
+    """Обновить конкретное поле ремонта"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Список разрешенных полей для обновления
+        allowed_fields = ['car_number', 'car_model', 'description', 'master', 'cost']
+        
+        if field not in allowed_fields:
+            logging.error(f"Поле {field} не разрешено для обновления")
+            return False
+        
+        # Для числовых полей проверяем тип
+        if field == 'cost':
+            value = float(value)
+        
+        query = f"UPDATE repairs SET {field} = %s, updated_at = NOW() WHERE id = %s"
+        cur.execute(query, (value, repair_id))
+        conn.commit()
+        
+        cur.close
