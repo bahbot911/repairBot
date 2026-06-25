@@ -12,17 +12,28 @@ import tempfile
 import subprocess
 import speech_recognition as sr
 
+# ============= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =============
+
 def format_datetime(value):
-    """Безопасное форматирование даты"""
+    """Безопасное форматирование даты для вывода"""
+    if not value:
+        return "Дата неизвестна"
+    
     if isinstance(value, datetime):
         return value.strftime('%d.%m.%Y %H:%M')
+    
     if isinstance(value, str):
         try:
-            # Пробуем распарсить строку
-            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
-            return dt.strftime('%d.%m.%Y %H:%M')
+            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d']:
+                try:
+                    dt = datetime.strptime(value, fmt)
+                    return dt.strftime('%d.%m.%Y %H:%M')
+                except:
+                    continue
+            return value[:16]
         except:
-            return str(value)[:16]  # Если не получилось - обрезаем строку
+            return str(value)[:16]
+    
     return str(value)
 
 # Настройка логов
@@ -83,7 +94,6 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username
     
-    # Проверка в белом списке
     if not db.is_user_whitelisted(user_id):
         if db.add_to_whitelist(user_id, username):
             await message.answer(
@@ -131,7 +141,6 @@ async def add_repair_start(message: types.Message):
         "Иван Петров\n\n"
         "🎤 Или отправьте голосовое сообщение с описанием!"
     )
-    # Устанавливаем состояние
     dp['state'] = {'action': 'add_repair', 'user_id': message.from_user.id}
 
 # ============= ОБРАБОТКА ГОЛОСОВЫХ СООБЩЕНИЙ =============
@@ -140,29 +149,23 @@ async def add_repair_start(message: types.Message):
 async def add_repair_from_voice(message: types.Message):
     """Обработка голосового сообщения для создания нового ремонта"""
     
-    # Отправляем сообщение о начале обработки
     processing_msg = await message.answer("🎤 Обрабатываю голосовое сообщение...")
     
     try:
-        # Получаем файл голосового сообщения
         voice = message.voice
         file_id = voice.file_id
         file_info = await bot.get_file(file_id)
         
-        # Скачиваем файл в память
         voice_bytes = await bot.download_file(file_info.file_path)
         
-        # Сохраняем во временный файл
         with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as tmp_ogg:
             tmp_ogg.write(voice_bytes.read())
             tmp_ogg_path = tmp_ogg.name
         
-        # Конвертируем OGG в WAV
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_wav:
             tmp_wav_path = tmp_wav.name
         
         try:
-            # Конвертация с помощью ffmpeg
             subprocess.run([
                 'ffmpeg',
                 '-i', tmp_ogg_path,
@@ -173,14 +176,12 @@ async def add_repair_from_voice(message: types.Message):
                 '-y'
             ], check=True, capture_output=True)
             
-            # Распознаем речь
             recognizer = sr.Recognizer()
             with sr.AudioFile(tmp_wav_path) as source:
                 recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio_data = recognizer.record(source)
                 text = recognizer.recognize_google(audio_data, language='ru-RU')
             
-            # Парсим текст голосового сообщения
             lines = [line.strip() for line in text.split('\n') if line.strip()]
             
             if len(lines) >= 2:
@@ -201,7 +202,6 @@ async def add_repair_from_voice(message: types.Message):
                     description = text
                     master = None
             
-            # Сохраняем ремонт в базу данных
             repair_id = db.add_repair(
                 car_number, 
                 description, 
@@ -210,22 +210,20 @@ async def add_repair_from_voice(message: types.Message):
                 message.from_user.id
             )
             
-            # Сбрасываем состояние
             dp['state'] = {}
             
-            # Отправляем подтверждение
             repair = db.get_repair(repair_id)
-created_date = format_datetime(repair['created_at']) if repair else datetime.now().strftime('%d.%m.%Y %H:%M')
-
-await processing_msg.edit_text(
-    f"✅ Ремонт #{repair_id} успешно создан из голосового сообщения!\n\n"
-    f"🚗 Номер: {car_number}\n"
-    f"📝 Описание: {description}\n"
-    f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
-    f"📅 Дата: {created_date}\n\n"
-    f"🎤 Распознанный текст:\n{text}",
-    reply_markup=get_main_keyboard()
-)
+            created_date = format_datetime(repair['created_at']) if repair else datetime.now().strftime('%d.%m.%Y %H:%M')
+            
+            await processing_msg.edit_text(
+                f"✅ Ремонт #{repair_id} успешно создан из голосового сообщения!\n\n"
+                f"🚗 Номер: {car_number}\n"
+                f"📝 Описание: {description}\n"
+                f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
+                f"📅 Дата: {created_date}\n\n"
+                f"🎤 Распознанный текст:\n{text}",
+                reply_markup=get_main_keyboard()
+            )
             
         except subprocess.CalledProcessError as e:
             await processing_msg.edit_text(
@@ -290,18 +288,18 @@ async def add_repair_process(message: types.Message):
     try:
         repair_id = db.add_repair(car_number, description, car_model, master, message.from_user.id)
         
-       repair = db.get_repair(repair_id)
-created_date = format_datetime(repair['created_at']) if repair else datetime.now().strftime('%d.%m.%Y %H:%M')
-
-await message.answer(
-    f"✅ Ремонт добавлен!\n\n"
-    f"🆔 ID: {repair_id}\n"
-    f"🚗 Номер: {car_number}\n"
-    f"📝 Описание: {description}\n"
-    f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
-    f"📅 Дата: {created_date}",
-    reply_markup=get_main_keyboard()
-)
+        repair = db.get_repair(repair_id)
+        created_date = format_datetime(repair['created_at']) if repair else datetime.now().strftime('%d.%m.%Y %H:%M')
+        
+        await message.answer(
+            f"✅ Ремонт добавлен!\n\n"
+            f"🆔 ID: {repair_id}\n"
+            f"🚗 Номер: {car_number}\n"
+            f"📝 Описание: {description}\n"
+            f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
+            f"📅 Дата: {created_date}",
+            reply_markup=get_main_keyboard()
+        )
     except Exception as e:
         await message.answer(f"❌ Ошибка при добавлении ремонта: {str(e)}")
     
@@ -334,7 +332,6 @@ async def edit_repair_select(message: types.Message):
             dp['state'] = {}
             return
         
-        # Показываем информацию о ремонте и предлагаем выбрать поле для редактирования
         text = (
             f"✏️ *Редактирование ремонта #{repair_id}*\n\n"
             f"🚗 Номер: {repair['car_number']}\n"
@@ -377,7 +374,6 @@ async def edit_field_callback(callback_query: types.CallbackQuery):
     }
     
     if field == 'status':
-        # Показываем клавиатуру для выбора статуса
         await bot.send_message(
             callback_query.from_user.id,
             f"Выберите новый статус для ремонта #{repair_id}:",
@@ -385,7 +381,6 @@ async def edit_field_callback(callback_query: types.CallbackQuery):
         )
         return
     
-    # Для остальных полей запрашиваем ввод
     await bot.send_message(
         callback_query.from_user.id,
         f"Введите новое значение для поля '{field_names.get(field, field)}':\n\n"
@@ -410,7 +405,6 @@ async def set_status_callback(callback_query: types.CallbackQuery):
     status = parts[3]
     
     try:
-        # Если статус "завершён", запрашиваем стоимость
         if status == 'завершён':
             await bot.send_message(
                 callback_query.from_user.id,
@@ -424,7 +418,6 @@ async def set_status_callback(callback_query: types.CallbackQuery):
             }
             return
         
-        # Обновляем статус
         if db.update_repair_status(repair_id, status):
             await bot.send_message(
                 callback_query.from_user.id,
@@ -485,11 +478,9 @@ async def edit_repair_input(message: types.Message):
     new_value = message.text.strip()
     
     try:
-        # Преобразуем значение для соответствующих полей
         if field == 'cost':
             new_value = float(new_value.replace(',', '.'))
         
-        # Обновляем поле в БД
         if db.update_repair_field(repair_id, field, new_value):
             repair = db.get_repair(repair_id)
             
@@ -553,7 +544,6 @@ async def show_active_repairs(message: types.Message):
     
     text = "📋 *Активные ремонты:*\n\n"
     for r in repairs:
-        # Используем нашу новую функцию для форматирования даты
         created = format_datetime(r.get('created_at'))
         
         text += (
@@ -565,16 +555,6 @@ async def show_active_repairs(message: types.Message):
             f"---\n"
         )
     
-    # Добавляем кнопки для завершения
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    for r in repairs[:5]:
-        keyboard.add(
-            InlineKeyboardButton(f"✅ Завершить #{r['id']}", callback_data=f"complete_{r['id']}"),
-            InlineKeyboardButton(f"✏️ Редактировать #{r['id']}", callback_data=f"edit_from_list_{r['id']}")
-        )
-    
-    await message.answer(text, reply_markup=keyboard, parse_mode='Markdown')
-    # Добавляем кнопки для завершения
     keyboard = InlineKeyboardMarkup(row_width=2)
     for r in repairs[:5]:
         keyboard.add(
@@ -628,7 +608,6 @@ async def process_complete_callback(callback_query: types.CallbackQuery):
         await bot.send_message(callback_query.from_user.id, "❌ Ремонт не найден")
         return
     
-    # Запрашиваем стоимость
     await bot.send_message(
         callback_query.from_user.id,
         f"💰 Введите стоимость ремонта #{repair_id}:\n"
@@ -637,7 +616,6 @@ async def process_complete_callback(callback_query: types.CallbackQuery):
         f"📝 {repair['description']}"
     )
     
-    # Сохраняем состояние
     dp['state'] = {
         'action': 'complete_repair',
         'repair_id': repair_id,
@@ -676,7 +654,6 @@ async def show_completed_repairs(message: types.Message):
     
     text = "✅ *Завершённые ремонты:*\n\n"
     for r in repairs:
-        # Форматируем дату завершения
         completed = format_datetime(r.get('completed_at'))
         
         text += (
@@ -689,6 +666,7 @@ async def show_completed_repairs(message: types.Message):
         )
     
     await message.answer(text, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+
 @dp.message_handler(lambda message: message.text == '📊 Статистика')
 async def show_stats(message: types.Message):
     """Показать статистику"""
@@ -744,7 +722,6 @@ async def search_car_process(message: types.Message):
     for r in repairs[:10]:
         status_emoji = "✅" if r['status'] == 'завершён' else "🔄"
         cost_str = f"💰 {r['cost']:.2f} руб." if r['cost'] else ""
-        # Форматируем дату создания
         created = format_datetime(r.get('created_at'))
         
         text += (
@@ -780,15 +757,12 @@ async def handle_unknown(message: types.Message):
 async def on_startup(dp):
     """Действия при запуске бота"""
     try:
-        # Принудительно удаляем webhook с очисткой ожидающих обновлений
         await bot.delete_webhook(drop_pending_updates=True)
         print("✅ Webhook удалён с очисткой ожидающих обновлений")
         
-        # Пропускаем все старые обновления
         await bot.get_updates(offset=-1, timeout=1)
         print("✅ Старые обновления пропущены")
         
-        # Устанавливаем команды бота
         await bot.set_my_commands([
             BotCommand("start", "Начать работу"),
             BotCommand("help", "Помощь"),
@@ -799,51 +773,14 @@ async def on_startup(dp):
         print("🤖 Бот запущен и готов к работе!")
     except Exception as e:
         print(f"⚠️ Ошибка при старте: {e}")
+
 if __name__ == '__main__':
     try:
         print("🚀 Запуск repairBot...")
         print(f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # Проверяем переменные окружения
         token = os.getenv('BOT_TOKEN')
         db_url = os.getenv('DATABASE_URL')
         
         if not token:
-            print("❌ ОШИБКА: BOT_TOKEN не установлен!")
-            exit(1)
-        
-        if not db_url:
-            print("❌ ОШИБКА: DATABASE_URL не установлен!")
-            exit(1)
-        
-        print("✅ Переменные окружения проверены")
-        
-        # Проверяем подключение к БД
-        print("⏳ Проверка подключения к БД...")
-        if not db.test_connection():
-            print("❌ Не удалось подключиться к PostgreSQL. Завершение...")
-            exit(1)
-        print("✅ Подключение к БД успешно")
-        
-        # Инициализируем БД
-        print("⏳ Инициализация БД...")
-        db.init_db()
-        print("✅ БД инициализирована")
-        
-        # Ждем, пока старый экземпляр завершится
-        print("⏳ Ожидание завершения старых процессов...")
-        time.sleep(3)
-        
-        # Запускаем бота
-        print("🚀 Запуск polling...")
-        executor.start_polling(
-            dp, 
-            skip_updates=True,
-            on_startup=on_startup,
-            allowed_updates=['message', 'callback_query']
-        )
-        
-    except Exception as e:
-        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
-        traceback.print_exc()
-        exit(1)
+            print("
