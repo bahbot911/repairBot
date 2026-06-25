@@ -783,4 +783,36 @@ if __name__ == '__main__':
         db_url = os.getenv('DATABASE_URL')
         
         if not token:
-            print("
+            print("❌ ОШИБКА: BOT_TOKEN не установлен!")
+            exit(1)
+        
+        if not db_url:
+            print("❌ ОШИБКА: DATABASE_URL не установлен!")
+            exit(1)
+        
+        print("✅ Переменные окружения проверены")
+        print("⏳ Проверка подключения к БД...")
+        
+        if not db.test_connection():
+            print("❌ Не удалось подключиться к PostgreSQL. Завершение...")
+            exit(1)
+        
+        print("✅ Подключение к БД успешно")
+        print("⏳ Инициализация БД...")
+        db.init_db()
+        print("✅ БД инициализирована")
+        print("⏳ Ожидание завершения старых процессов...")
+        time.sleep(3)
+        print("🚀 Запуск polling...")
+        
+        executor.start_polling(
+            dp, 
+            skip_updates=True,
+            on_startup=on_startup,
+            allowed_updates=['message', 'callback_query']
+        )
+        
+    except Exception as e:
+        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        traceback.print_exc()
+        exit(1)
