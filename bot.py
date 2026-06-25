@@ -12,6 +12,19 @@ import tempfile
 import subprocess
 import speech_recognition as sr
 
+def format_datetime(value):
+    """Безопасное форматирование даты"""
+    if isinstance(value, datetime):
+        return value.strftime('%d.%m.%Y %H:%M')
+    if isinstance(value, str):
+        try:
+            # Пробуем распарсить строку
+            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            return dt.strftime('%d.%m.%Y %H:%M')
+        except:
+            return str(value)[:16]  # Если не получилось - обрезаем строку
+    return str(value)
+
 # Настройка логов
 logging.basicConfig(level=logging.INFO)
 
@@ -201,15 +214,18 @@ async def add_repair_from_voice(message: types.Message):
             dp['state'] = {}
             
             # Отправляем подтверждение
-            await processing_msg.edit_text(
-                f"✅ Ремонт #{repair_id} успешно создан из голосового сообщения!\n\n"
-                f"🚗 Номер: {car_number}\n"
-                f"📝 Описание: {description}\n"
-                f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
-                f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-                f"🎤 Распознанный текст:\n{text}",
-                reply_markup=get_main_keyboard()
-            )
+            repair = db.get_repair(repair_id)
+created_date = format_datetime(repair['created_at']) if repair else datetime.now().strftime('%d.%m.%Y %H:%M')
+
+await processing_msg.edit_text(
+    f"✅ Ремонт #{repair_id} успешно создан из голосового сообщения!\n\n"
+    f"🚗 Номер: {car_number}\n"
+    f"📝 Описание: {description}\n"
+    f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
+    f"📅 Дата: {created_date}\n\n"
+    f"🎤 Распознанный текст:\n{text}",
+    reply_markup=get_main_keyboard()
+)
             
         except subprocess.CalledProcessError as e:
             await processing_msg.edit_text(
@@ -274,15 +290,18 @@ async def add_repair_process(message: types.Message):
     try:
         repair_id = db.add_repair(car_number, description, car_model, master, message.from_user.id)
         
-        await message.answer(
-            f"✅ Ремонт добавлен!\n\n"
-            f"🆔 ID: {repair_id}\n"
-            f"🚗 Номер: {car_number}\n"
-            f"📝 Описание: {description}\n"
-            f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
-            f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
-            reply_markup=get_main_keyboard()
-        )
+       repair = db.get_repair(repair_id)
+created_date = format_datetime(repair['created_at']) if repair else datetime.now().strftime('%d.%m.%Y %H:%M')
+
+await message.answer(
+    f"✅ Ремонт добавлен!\n\n"
+    f"🆔 ID: {repair_id}\n"
+    f"🚗 Номер: {car_number}\n"
+    f"📝 Описание: {description}\n"
+    f"👨‍🔧 Мастер: {master or 'Не указан'}\n"
+    f"📅 Дата: {created_date}",
+    reply_markup=get_main_keyboard()
+)
     except Exception as e:
         await message.answer(f"❌ Ошибка при добавлении ремонта: {str(e)}")
     
@@ -534,15 +553,27 @@ async def show_active_repairs(message: types.Message):
     
     text = "📋 *Активные ремонты:*\n\n"
     for r in repairs:
+        # Используем нашу новую функцию для форматирования даты
+        created = format_datetime(r.get('created_at'))
+        
         text += (
             f"🆔 #{r['id']}\n"
             f"🚗 {r['car_number']} {r['car_model'] or ''}\n"
             f"📝 {r['description'][:40]}{'...' if len(r['description']) > 40 else ''}\n"
             f"👨‍🔧 {r['master'] or 'Не указан'}\n"
-            f"📅 {r['created_at'].strftime('%d.%m.%Y %H:%M')}\n"
+            f"📅 {created}\n"
             f"---\n"
         )
     
+    # Добавляем кнопки для завершения
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    for r in repairs[:5]:
+        keyboard.add(
+            InlineKeyboardButton(f"✅ Завершить #{r['id']}", callback_data=f"complete_{r['id']}"),
+            InlineKeyboardButton(f"✏️ Редактировать #{r['id']}", callback_data=f"edit_from_list_{r['id']}")
+        )
+    
+    await message.answer(text, reply_markup=keyboard, parse_mode='Markdown')
     # Добавляем кнопки для завершения
     keyboard = InlineKeyboardMarkup(row_width=2)
     for r in repairs[:5]:
@@ -645,17 +676,19 @@ async def show_completed_repairs(message: types.Message):
     
     text = "✅ *Завершённые ремонты:*\n\n"
     for r in repairs:
+        # Форматируем дату завершения
+        completed = format_datetime(r.get('completed_at'))
+        
         text += (
             f"🆔 #{r['id']}\n"
             f"🚗 {r['car_number']} {r['car_model'] or ''}\n"
             f"📝 {r['description'][:40]}{'...' if len(r['description']) > 40 else ''}\n"
             f"💰 {r['cost']:.2f} руб.\n"
-            f"📅 {r['completed_at'].strftime('%d.%m.%Y') if r['completed_at'] else 'Дата неизвестна'}\n"
+            f"📅 {completed}\n"
             f"---\n"
         )
     
     await message.answer(text, reply_markup=get_main_keyboard(), parse_mode='Markdown')
-
 @dp.message_handler(lambda message: message.text == '📊 Статистика')
 async def show_stats(message: types.Message):
     """Показать статистику"""
@@ -711,11 +744,14 @@ async def search_car_process(message: types.Message):
     for r in repairs[:10]:
         status_emoji = "✅" if r['status'] == 'завершён' else "🔄"
         cost_str = f"💰 {r['cost']:.2f} руб." if r['cost'] else ""
+        # Форматируем дату создания
+        created = format_datetime(r.get('created_at'))
         
         text += (
             f"{status_emoji} #{r['id']} | {r['status']}\n"
             f"📝 {r['description'][:50]}{'...' if len(r['description']) > 50 else ''}\n"
             f"{cost_str}\n"
+            f"📅 {created}\n"
             f"---\n"
         )
     
