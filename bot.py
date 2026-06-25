@@ -742,7 +742,28 @@ async def handle_unknown(message: types.Message):
 # ============= ЗАПУСК =============
 
 async def on_startup(dp):
-   if __name__ == '__main__':
+    """Действия при запуске бота"""
+    try:
+        # Принудительно удаляем webhook с очисткой ожидающих обновлений
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook удалён с очисткой ожидающих обновлений")
+        
+        # Пропускаем все старые обновления
+        await bot.get_updates(offset=-1, timeout=1)
+        print("✅ Старые обновления пропущены")
+        
+        # Устанавливаем команды бота
+        await bot.set_my_commands([
+            BotCommand("start", "Начать работу"),
+            BotCommand("help", "Помощь"),
+            BotCommand("cancel", "Отменить действие")
+        ])
+        print("✅ Команды установлены")
+        
+        print("🤖 Бот запущен и готов к работе!")
+    except Exception as e:
+        print(f"⚠️ Ошибка при старте: {e}")
+if __name__ == '__main__':
     try:
         print("🚀 Запуск repairBot...")
         print(f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
